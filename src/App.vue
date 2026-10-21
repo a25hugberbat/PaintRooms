@@ -161,7 +161,7 @@ onMounted(() => {
 
 <template>
   <div class="container my-4">
-    <h1 class="h3 mb-4 text-center">🎨 PaintRooms</h1>
+    <h1 class="h3 mb-4 text-center">PaintRooms</h1>
 
     <!-- LOBBY -->
     <div v-if="!data.dinsSala" class="card shadow-sm mx-auto" style="max-width: 400px;">
