@@ -6,10 +6,10 @@ const io = new Server(server, {
   cors: { origin: '*' }
 });
 
-// sales['Prova'] = { usuaris: { socketId: { username, color } }, tracos: [ { color, width, punts: [ {x, y} ] } ] }
+// sales['Prova'] = { usuaris: { socketId: { username, color } }, tracos: [ { autor, color, width, punts: [ {x, y} ] } ] }
 const sales = {};
 
-// Màxim de traços guardats per sala (buffer curt)
+// Màxim de traços guardats per sala
 const MAX_TRACOS = 500;
 
 // Llista d'usuaris d'una sala en format [{ username, color }]
@@ -17,36 +17,52 @@ function llistaUsuaris(roomName) {
   return Object.values(sales[roomName].usuaris);
 }
 
+// Treure un socket de la seva sala (per "Sortir" i per desconnexió)
+function sortirDeSala(socket) {
+  const roomName = socket.data.roomName;
+  if (!roomName) return;
+
+  delete sales[roomName].usuaris[socket.id];
+  socket.leave(roomName);
+  socket.data.roomName = null;
+
+  io.to(roomName).emit('room_users', llistaUsuaris(roomName));
+  io.to(roomName).emit('user_left', socket.id);
+}
+
 io.on('connection', (socket) => {
 
   console.log('a user connected');
 
   // 1. Entrar a una sala (si no existeix, es crea)
-  socket.on('join_room', ({ roomName, username }, callback) => {
+  socket.on('join_room', ({ roomName, username }) => {
+    sortirDeSala(socket); // per si ja era en una altra
+
     if (!sales[roomName]) {
       sales[roomName] = { usuaris: {}, tracos: [] };
     }
 
     socket.join(roomName);
-
     socket.data.roomName = roomName;
     socket.data.username = username;
     socket.data.color = 'hsl(' + Math.floor(Math.random() * 360) + ', 70%, 50%)';
     socket.data.tracActual = null;
 
-    sales[roomName].usuaris[socket.id] = {
-      username: username,
-      color: socket.data.color
-    };
+    sales[roomName].usuaris[socket.id] = { username: username, color: socket.data.color };
 
-    // Estat inicial del canvas només per a qui entra
-    callback({ tracos: sales[roomName].tracos });
+    // Només a qui entra: el dibuix que ja hi ha a la sala
+    socket.emit('repintar', sales[roomName].tracos);
 
-    // Nova llista d'usuaris per a tota la sala
+    // A tota la sala: la nova llista d'usuaris
     io.to(roomName).emit('room_users', llistaUsuaris(roomName));
   });
 
-  // 2. Cursor: a la resta de la sala (sense eco)
+  // 2. Sortir de la sala
+  socket.on('leave_room', () => {
+    sortirDeSala(socket);
+  });
+
+  // 3. Cursor: a la resta de la sala
   socket.on('cursor_move', ({ x, y }) => {
     const roomName = socket.data.roomName;
     if (!roomName) return;
@@ -60,7 +76,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 3. Traços
+  // 4. Traços
   socket.on('draw_begin', ({ x, y, color, width }) => {
     const roomName = socket.data.roomName;
     if (!roomName) return;
@@ -81,36 +97,29 @@ io.on('connection', (socket) => {
     const roomName = socket.data.roomName;
     if (!roomName || !socket.data.tracActual) return;
 
-    // Guardem el traç acabat per als que entrin després
     sales[roomName].tracos.push(socket.data.tracActual);
     if (sales[roomName].tracos.length > MAX_TRACOS) {
       sales[roomName].tracos.shift();
     }
     socket.data.tracActual = null;
 
-    socket.to(roomName).emit('draw_end', { id: socket.id });
+    socket.to(roomName).emit('draw_end', socket.id);
   });
 
-  // 4. Netejar només els traços de qui prem el botó
+  // 5. Netejar només els traços de qui prem el botó
   socket.on('clear_canvas', () => {
     const roomName = socket.data.roomName;
     if (!roomName) return;
 
-    // Ens quedem només amb els traços que NO són seus
     sales[roomName].tracos = sales[roomName].tracos.filter((t) => t.autor !== socket.data.username);
 
-    // Tothom esborra i torna a pintar els que queden
-    io.to(roomName).emit('clear_canvas', { tracos: sales[roomName].tracos });
+    // Tothom torna a pintar el que queda
+    io.to(roomName).emit('repintar', sales[roomName].tracos);
   });
 
-  // 5. Desconnexió
+  // 6. Desconnexió (tancar pestanya, refrescar...)
   socket.on('disconnect', () => {
-    const roomName = socket.data.roomName;
-    if (!roomName) return;
-
-    delete sales[roomName].usuaris[socket.id];
-    io.to(roomName).emit('room_users', llistaUsuaris(roomName));
-    io.to(roomName).emit('user_left', { id: socket.id });
+    sortirDeSala(socket);
   });
 
 });
